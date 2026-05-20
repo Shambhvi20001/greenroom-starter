@@ -6,8 +6,12 @@ import {
   ArrowRight,
   Check,
   AlertTriangle,
+  CheckCircle2,
+  ClipboardCheck,
   Mail,
+  MessageSquareText,
   Pencil,
+  ShieldAlert,
   XCircle,
   Wallet,
   TrendingUp,
@@ -28,6 +32,11 @@ import {
   formatShowDateFull,
 } from "@/lib/format";
 import type { Settlement, Recoup } from "@/db/schema";
+import {
+  assessSettlementReadiness,
+  type ReadinessIssue,
+  type SettlementReadiness,
+} from "@/lib/settlementReadiness";
 import { Logomark } from "@/components/brand/logo";
 
 const RECOUP_LABELS: Record<Recoup["category"], string> = {
@@ -77,6 +86,12 @@ export default async function SettlePage({
   const disputedRecoups = recoups.filter((r) => r.status === "disputed");
   const isDisputed = settlement?.status === "disputed" || settlement?.status === "revised" || !!settlement?.disputedAt;
   const disputedRecoupValue = disputedRecoups.reduce((s, r) => s + r.amount, 0);
+  const readiness = assessSettlementReadiness({
+    deal,
+    expenses,
+    recoups,
+    settlement,
+  });
 
   return (
     <div className={`px-12 py-10 max-w-7xl ${isDisputed ? "bg-gradient-to-b from-rose-50/30 via-canvas to-canvas" : ""}`}>
@@ -127,6 +142,8 @@ export default async function SettlePage({
       )}
 
       <div className="space-y-6 mt-6">
+        <ReadinessBrief readiness={readiness} />
+
         {!calc.supported ? (
           <UnsupportedDeal
             dealType={calc.dealType}
@@ -171,6 +188,182 @@ export default async function SettlePage({
             </p>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ReadinessBrief({ readiness }: { readiness: SettlementReadiness }) {
+  const statusCopy: Record<
+    SettlementReadiness["status"],
+    {
+      label: string;
+      badge: React.ReactNode;
+      icon: React.ComponentType<{ className?: string }>;
+      accent: "brand" | "amber" | "rose";
+    }
+  > = {
+    blocked: {
+      label: "Needs clarification",
+      badge: <PlainBadge variant="rose">Blocked</PlainBadge>,
+      icon: ShieldAlert,
+      accent: "rose",
+    },
+    needs_review: {
+      label: "Ready with caveats",
+      badge: <PlainBadge variant="amber">Review</PlainBadge>,
+      icon: AlertTriangle,
+      accent: "amber",
+    },
+    ready: {
+      label: "Ready to walk through",
+      badge: <PlainBadge variant="brand">Ready</PlainBadge>,
+      icon: CheckCircle2,
+      accent: "brand",
+    },
+  };
+
+  const config = statusCopy[readiness.status];
+  const Icon = config.icon;
+
+  return (
+    <Card accent={config.accent}>
+      <CardHeader>
+        <div>
+          <CardTitle>Settlement readiness brief</CardTitle>
+          <CardDescription>
+            A pre-flight for the recoup, cap, and paper-trail questions that
+            tend to become next-day disputes.
+          </CardDescription>
+        </div>
+        {config.badge}
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
+          <div className="rounded-lg bg-canvas-soft ring-1 ring-ink-200/70 p-4">
+            <div className="flex items-center gap-2 text-[12px] font-semibold text-ink-900">
+              <Icon className="h-4 w-4" />
+              {config.label}
+            </div>
+            <div className="mt-4 flex items-end gap-2">
+              <span className="font-mono text-[42px] leading-none font-semibold text-ink-900 tabular">
+                {readiness.score}
+              </span>
+              <span className="pb-1 text-[12px] text-ink-400">/ 100</span>
+            </div>
+            <p className="mt-3 text-[12px] leading-relaxed text-ink-500">
+              {readiness.summary}
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {readiness.issues.length > 0 ? (
+              readiness.issues.map((issue, index) => (
+                <ReadinessIssueRow key={`${issue.title}-${index}`} issue={issue} />
+              ))
+            ) : (
+              <div className="rounded-lg border border-brand-200/70 bg-brand-50/40 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 text-brand-700 shrink-0" />
+                  <div>
+                    <div className="text-[13px] font-semibold text-ink-900">
+                      No settlement blockers detected
+                    </div>
+                    <p className="text-[12px] leading-relaxed text-ink-500 mt-1">
+                      Recoups, caps, and sign-off status all look internally
+                      consistent from the data Greenroom has.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-sky-200/70 bg-sky-50/50 px-4 py-3">
+              <div className="flex items-start gap-2.5">
+                <MessageSquareText className="mt-0.5 h-4 w-4 text-sky-700 shrink-0" />
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-sky-800 font-semibold">
+                    Draft agent clarification
+                  </div>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">
+                    {readiness.agentMessage}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReadinessIssueRow({ issue }: { issue: ReadinessIssue }) {
+  const severityStyles: Record<
+    ReadinessIssue["severity"],
+    { badge: React.ReactNode; icon: React.ComponentType<{ className?: string }>; border: string; iconColor: string }
+  > = {
+    critical: {
+      badge: <PlainBadge variant="rose">Blocker</PlainBadge>,
+      icon: ShieldAlert,
+      border: "border-rose-200/70 bg-rose-50/35",
+      iconColor: "text-rose-700",
+    },
+    warning: {
+      badge: <PlainBadge variant="amber">Review</PlainBadge>,
+      icon: AlertTriangle,
+      border: "border-amber-200/70 bg-amber-50/35",
+      iconColor: "text-amber-700",
+    },
+    info: {
+      badge: <PlainBadge variant="sky">Evidence</PlainBadge>,
+      icon: ClipboardCheck,
+      border: "border-sky-200/70 bg-sky-50/35",
+      iconColor: "text-sky-700",
+    },
+  };
+  const config = severityStyles[issue.severity];
+  const Icon = config.icon;
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${config.border}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${config.iconColor}`} />
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-ink-900">
+              {issue.title}
+            </div>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink-600">
+              {issue.body}
+            </p>
+          </div>
+        </div>
+        {config.badge}
+      </div>
+      <div className="mt-3 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 border-t border-ink-200/60 pt-3">
+        <MiniEvidence label="Evidence" value={issue.evidence} />
+        <MiniEvidence label="Next move" value={issue.action} />
+        <div className="min-w-[120px]">
+          <div className="eyebrow text-[10px] text-ink-500 mb-1">Owner</div>
+          <div className="text-[12.5px] text-ink-900">{issue.owner}</div>
+          {issue.moneyAtRisk != null && issue.moneyAtRisk > 0 && (
+            <div className="mt-1 font-mono text-[12px] text-rose-700 tabular">
+              {formatMoney(issue.moneyAtRisk)} at risk
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniEvidence({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="eyebrow text-[10px] text-ink-500 mb-1">{label}</div>
+      <div className="text-[12px] leading-relaxed text-ink-700 line-clamp-3">
+        {value}
       </div>
     </div>
   );
